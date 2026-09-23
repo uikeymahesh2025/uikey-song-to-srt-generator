@@ -109,4 +109,61 @@ describe("UIKEY AI Frontend Tests", () => {
 
     expect(downloadSpy).toHaveBeenCalledWith(mockSrt, filename);
   });
+
+  it("7. Share utility handles navigator.share gracefully on mobile", async () => {
+    const originalShare = navigator.share;
+    const shareMock = vi.fn().mockResolvedValue(undefined);
+    Object.assign(navigator, {
+      share: shareMock,
+      canShare: () => true,
+    });
+
+    const hindiSrt = "1\n00:00:00,000 --> 00:00:03,000\nतेरे बिना\n";
+    const shared = await downloadModule.shareSrtFile(hindiSrt, "Tum_Hi_Ho_MASTER_SYNC.srt");
+
+    expect(shared).toBe(true);
+    expect(shareMock).toHaveBeenCalled();
+
+    Object.assign(navigator, { share: originalShare });
+  });
+
+  it("8. Allows cancelling active processing", async () => {
+    (global.fetch as any).mockImplementation(() => new Promise(() => {})); // simulate hung request
+
+    render(<Home />);
+    const audioFile = new File(["audio dummy"], "track.mp3", { type: "audio/mp3" });
+    const hiddenInput = document.querySelector('input[type="file"]') as HTMLInputElement;
+    fireEvent.change(hiddenInput, { target: { files: [audioFile] } });
+
+    const textarea = screen.getByPlaceholderText(/Paste your original song lyrics/i);
+    fireEvent.change(textarea, { target: { value: "Test lyrics" } });
+
+    const generateBtn = screen.getByRole("button", { name: /GENERATE MASTER SRT/i });
+    fireEvent.click(generateBtn);
+
+    const cancelBtn = screen.getByRole("button", { name: /Cancel/i });
+    expect(cancelBtn).toBeInTheDocument();
+
+    fireEvent.click(cancelBtn);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Audio processing cancelled by user/i)).toBeInTheDocument();
+    });
+  });
+
+  it("9. Rejects audio file exceeding 50 MB in AudioUploader", () => {
+    const onFileSelect = vi.fn();
+    render(<AudioUploader selectedFile={null} onFileSelect={onFileSelect} />);
+
+    // Create a mock oversized file (> 50 MB)
+    const oversizedFile = new File(["dummy content"], "large_track.mp3", { type: "audio/mp3" });
+    Object.defineProperty(oversizedFile, "size", { value: 55 * 1024 * 1024 });
+
+    const hiddenInput = document.querySelector('input[type="file"]') as HTMLInputElement;
+    fireEvent.change(hiddenInput, { target: { files: [oversizedFile] } });
+
+    expect(onFileSelect).not.toHaveBeenCalled();
+    expect(screen.getByText(/exceeds maximum allowed size of 50 MB/i)).toBeInTheDocument();
+  });
 });
+

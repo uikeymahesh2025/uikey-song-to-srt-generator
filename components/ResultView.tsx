@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useEffect } from "react";
 import {
   Check,
   Copy,
@@ -12,9 +12,10 @@ import {
   Music,
   Clock,
   Play,
+  Share2,
 } from "lucide-react";
 import { AnalyzeStats } from "@/lib/types";
-import { downloadSrtFile } from "@/lib/download";
+import { downloadSrtFile, shareSrtFile } from "@/lib/download";
 
 interface ResultViewProps {
   srtContent: string;
@@ -36,7 +37,6 @@ interface ParsedSrtItem {
 }
 
 function parseTimestampToSeconds(ts: string): number {
-  // HH:MM:SS,mmm
   const parts = ts.trim().split("-->");
   if (!parts[0]) return 0;
   const match = parts[0].trim().match(/(\d{2}):(\d{2}):(\d{2})[,.](\d{3})/);
@@ -58,6 +58,13 @@ export const ResultView: React.FC<ResultViewProps> = ({
   const [activeTab, setActiveTab] = useState<"visual" | "raw">("visual");
   const [copied, setCopied] = useState(false);
   const [promptCopied, setPromptCopied] = useState(false);
+  const [canShare, setCanShare] = useState(false);
+
+  useEffect(() => {
+    if (typeof navigator !== "undefined" && typeof navigator.share === "function") {
+      setCanShare(true);
+    }
+  }, []);
 
   // Parse SRT content into structured items for interactive visual display
   const srtItems = useMemo<ParsedSrtItem[]>(() => {
@@ -116,6 +123,13 @@ export const ResultView: React.FC<ResultViewProps> = ({
     downloadSrtFile(srtContent, filename);
   };
 
+  const handleShare = async () => {
+    const shared = await shareSrtFile(srtContent, filename);
+    if (!shared) {
+      handleDownload();
+    }
+  };
+
   const handleDownloadVtt = () => {
     const vttContent =
       "WEBVTT\n\n" + srtContent.replace(/(\d{2}:\d{2}:\d{2}),(\d{3})/g, "$1.$2");
@@ -152,40 +166,40 @@ Task:
   };
 
   return (
-    <div className="glass-card rounded-2xl p-6 border border-emerald-500/40 shadow-2xl space-y-5 relative overflow-hidden">
+    <div className="glass-card rounded-2xl p-4 sm:p-6 border border-emerald-500/40 shadow-2xl space-y-4 sm:space-y-5 relative overflow-hidden">
       {/* Background Accent Glow */}
       <div className="absolute top-0 right-0 w-80 h-80 bg-emerald-500/10 rounded-full blur-3xl pointer-events-none"></div>
 
       {/* Top Header & Actions */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-white/[0.08] pb-5">
-        <div className="flex items-center gap-3.5">
-          <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-emerald-500/30 to-teal-500/20 border border-emerald-500/40 flex items-center justify-center text-emerald-400 shadow-md">
-            <Check className="w-6 h-6" />
+      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3.5 sm:gap-4 border-b border-white/[0.08] pb-4 sm:pb-5">
+        <div className="flex items-center gap-2.5 sm:gap-3.5 min-w-0">
+          <div className="w-10 h-10 sm:w-11 sm:h-11 rounded-xl bg-gradient-to-br from-emerald-500/30 to-teal-500/20 border border-emerald-500/40 flex items-center justify-center text-emerald-400 shadow-md flex-shrink-0">
+            <Check className="w-5 h-5 sm:w-6 sm:h-6" />
           </div>
-          <div>
-            <div className="flex items-center gap-2">
-              <h3 className="text-base font-extrabold text-white">
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap">
+              <h3 className="text-sm sm:text-base font-extrabold text-white">
                 MASTER SYNC SRT READY
               </h3>
-              <span className="text-[10px] font-bold font-mono px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
+              <span className="text-[9px] sm:text-[10px] font-bold font-mono px-1.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
                 1-Indexed • UTF-8
               </span>
             </div>
-            <p className="text-xs text-gray-400 font-mono mt-0.5 truncate max-w-sm sm:max-w-md">
+            <p className="text-[11px] sm:text-xs text-gray-400 font-mono mt-0.5 truncate">
               {filename}
             </p>
           </div>
         </div>
 
         {/* Action Button Bar */}
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2 w-full lg:w-auto">
           <button
             type="button"
             onClick={handleCopy}
-            className={`flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold rounded-lg transition-all border ${
+            className={`flex-1 sm:flex-initial flex items-center justify-center gap-1.5 px-3 py-2.5 min-h-[44px] text-xs font-bold rounded-lg transition-all border touch-manipulation ${
               copied
                 ? "bg-emerald-600 text-white border-emerald-500 shadow-md"
-                : "bg-gray-800 hover:bg-gray-700 text-gray-200 border-gray-700"
+                : "bg-gray-800 hover:bg-gray-700 active:bg-gray-600 text-gray-200 border-gray-700"
             }`}
           >
             {copied ? (
@@ -204,16 +218,28 @@ Task:
           <button
             type="button"
             onClick={handleDownload}
-            className="flex items-center gap-1.5 px-4 py-2 text-xs font-extrabold rounded-lg bg-emerald-500 hover:bg-emerald-400 text-gray-950 transition-all shadow-md shadow-emerald-950/40"
+            className="flex-1 sm:flex-initial flex items-center justify-center gap-1.5 px-4 py-2.5 min-h-[44px] text-xs font-extrabold rounded-lg bg-emerald-500 hover:bg-emerald-400 active:bg-emerald-600 text-gray-950 transition-all shadow-md shadow-emerald-950/40 touch-manipulation"
           >
             <Download className="w-3.5 h-3.5" />
             <span>DOWNLOAD SRT</span>
           </button>
 
+          {canShare && (
+            <button
+              type="button"
+              onClick={handleShare}
+              className="flex items-center justify-center gap-1 px-3 py-2.5 min-h-[44px] text-xs font-bold rounded-lg bg-teal-500/20 hover:bg-teal-500/30 text-teal-300 border border-teal-500/40 transition touch-manipulation"
+              title="Share or Save to Files on Mobile"
+            >
+              <Share2 className="w-3.5 h-3.5" />
+              <span className="hidden xs:inline">SHARE</span>
+            </button>
+          )}
+
           <button
             type="button"
             onClick={handleDownloadVtt}
-            className="hidden sm:flex items-center gap-1 px-2.5 py-2 text-xs font-semibold rounded-lg bg-gray-800/80 hover:bg-gray-700 text-gray-300 border border-gray-700/60 transition"
+            className="hidden sm:flex items-center gap-1 px-2.5 py-2 min-h-[40px] text-xs font-semibold rounded-lg bg-gray-800/80 hover:bg-gray-700 text-gray-300 border border-gray-700/60 transition touch-manipulation"
             title="Download WebVTT format for web players"
           >
             <span>.VTT</span>
@@ -222,7 +248,7 @@ Task:
           <button
             type="button"
             onClick={handleDownloadTxt}
-            className="hidden sm:flex items-center gap-1 px-2.5 py-2 text-xs font-semibold rounded-lg bg-gray-800/80 hover:bg-gray-700 text-gray-300 border border-gray-700/60 transition"
+            className="hidden sm:flex items-center gap-1 px-2.5 py-2 min-h-[40px] text-xs font-semibold rounded-lg bg-gray-800/80 hover:bg-gray-700 text-gray-300 border border-gray-700/60 transition touch-manipulation"
             title="Download Timed Lyrics Text format"
           >
             <span>.TXT</span>
@@ -232,39 +258,39 @@ Task:
 
       {/* Audio Engine Stats Grid */}
       {stats && (
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 text-xs">
-          <div className="bg-black/30 border border-white/[0.06] rounded-xl p-3 shadow-inner">
-            <span className="text-gray-400 text-[11px] block flex items-center gap-1">
-              <Clock className="w-3 h-3 text-emerald-400" /> Song Duration
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+          <div className="bg-black/30 border border-white/[0.06] rounded-xl p-2.5 sm:p-3 shadow-inner">
+            <span className="text-gray-400 text-[10px] sm:text-[11px] flex items-center gap-1">
+              <Clock className="w-3 h-3 text-emerald-400 flex-shrink-0" /> Duration
             </span>
-            <span className="font-mono font-bold text-base text-white mt-1 block">
+            <span className="font-mono font-bold text-sm sm:text-base text-white mt-0.5 sm:mt-1 block">
               {stats.duration_seconds.toFixed(1)}s
             </span>
           </div>
 
-          <div className="bg-black/30 border border-white/[0.06] rounded-xl p-3 shadow-inner">
-            <span className="text-gray-400 text-[11px] block flex items-center gap-1">
-              <FileText className="w-3 h-3 text-emerald-400" /> Lyric Lines
+          <div className="bg-black/30 border border-white/[0.06] rounded-xl p-2.5 sm:p-3 shadow-inner">
+            <span className="text-gray-400 text-[10px] sm:text-[11px] flex items-center gap-1">
+              <FileText className="w-3 h-3 text-emerald-400 flex-shrink-0" /> Lyrics
             </span>
-            <span className="font-mono font-bold text-base text-emerald-400 mt-1 block">
+            <span className="font-mono font-bold text-sm sm:text-base text-emerald-400 mt-0.5 sm:mt-1 block">
               {stats.lyric_lines} Lines
             </span>
           </div>
 
-          <div className="bg-black/30 border border-white/[0.06] rounded-xl p-3 shadow-inner">
-            <span className="text-gray-400 text-[11px] block flex items-center gap-1">
-              <Music className="w-3 h-3 text-cyan-400" /> Instrumental Gaps
+          <div className="bg-black/30 border border-white/[0.06] rounded-xl p-2.5 sm:p-3 shadow-inner">
+            <span className="text-gray-400 text-[10px] sm:text-[11px] flex items-center gap-1">
+              <Music className="w-3 h-3 text-cyan-400 flex-shrink-0" /> Gaps
             </span>
-            <span className="font-mono font-bold text-base text-cyan-400 mt-1 block">
+            <span className="font-mono font-bold text-sm sm:text-base text-cyan-400 mt-0.5 sm:mt-1 block">
               {stats.instrumental_gaps} Gaps
             </span>
           </div>
 
-          <div className="bg-black/30 border border-white/[0.06] rounded-xl p-3 shadow-inner">
-            <span className="text-gray-400 text-[11px] block flex items-center gap-1">
-              <Layers className="w-3 h-3 text-purple-400" /> Total Subtitle Cues
+          <div className="bg-black/30 border border-white/[0.06] rounded-xl p-2.5 sm:p-3 shadow-inner">
+            <span className="text-gray-400 text-[10px] sm:text-[11px] flex items-center gap-1">
+              <Layers className="w-3 h-3 text-purple-400 flex-shrink-0" /> Cues
             </span>
-            <span className="font-mono font-bold text-base text-purple-300 mt-1 block">
+            <span className="font-mono font-bold text-sm sm:text-base text-purple-300 mt-0.5 sm:mt-1 block">
               {stats.total_events} Cues
             </span>
           </div>
@@ -273,35 +299,35 @@ Task:
 
       {/* View Mode Tabs */}
       <div className="flex items-center justify-between border-b border-white/[0.08] pt-1">
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1 sm:gap-2">
           <button
             type="button"
             onClick={() => setActiveTab("visual")}
-            className={`flex items-center gap-2 py-2 px-3.5 text-xs font-bold border-b-2 transition ${
+            className={`flex items-center gap-1.5 py-2 px-2.5 sm:px-3.5 text-xs font-bold border-b-2 transition touch-manipulation ${
               activeTab === "visual"
                 ? "border-emerald-400 text-emerald-400"
                 : "border-transparent text-gray-400 hover:text-gray-200"
             }`}
           >
             <Layers className="w-3.5 h-3.5" />
-            <span>Interactive Timeline Cards ({srtItems.length})</span>
+            <span>Timeline ({srtItems.length})</span>
           </button>
 
           <button
             type="button"
             onClick={() => setActiveTab("raw")}
-            className={`flex items-center gap-2 py-2 px-3.5 text-xs font-bold border-b-2 transition ${
+            className={`flex items-center gap-1.5 py-2 px-2.5 sm:px-3.5 text-xs font-bold border-b-2 transition touch-manipulation ${
               activeTab === "raw"
                 ? "border-emerald-400 text-emerald-400"
                 : "border-transparent text-gray-400 hover:text-gray-200"
             }`}
           >
             <Code className="w-3.5 h-3.5" />
-            <span>Raw SRT Code</span>
+            <span>Raw SRT</span>
           </button>
         </div>
 
-        <span className="text-[11px] text-gray-500 font-mono hidden sm:inline">
+        <span className="text-[10px] sm:text-[11px] text-gray-500 font-mono hidden sm:inline">
           {activeTab === "visual"
             ? "Click any card to jump audio"
             : "Standard SubRip UTF-8 format"}
@@ -310,7 +336,7 @@ Task:
 
       {/* Tab 1: Interactive Visual Timeline Cards */}
       {activeTab === "visual" && (
-        <div className="space-y-2.5 max-h-96 overflow-y-auto pr-1">
+        <div className="space-y-2 max-h-96 overflow-y-auto pr-1">
           {srtItems.map((item) => {
             const isCurrentlyActive =
               currentAudioTime >= item.startSec &&
@@ -320,52 +346,52 @@ Task:
               <div
                 key={item.index}
                 onClick={() => onSeekAudio && onSeekAudio(item.startSec)}
-                className={`p-3.5 rounded-xl border transition-all duration-150 cursor-pointer ${
+                className={`p-3 sm:p-3.5 rounded-xl border transition-all duration-150 cursor-pointer touch-manipulation ${
                   isCurrentlyActive
-                    ? "bg-emerald-950/60 border-emerald-400 shadow-[0_0_20px_rgba(16,185,129,0.3)] scale-[1.01]"
+                    ? "bg-emerald-950/60 border-emerald-400 shadow-[0_0_20px_rgba(16,185,129,0.3)] scale-[1.008]"
                     : item.isInstrumental
                     ? "bg-black/40 border-purple-500/20 hover:border-purple-500/40 text-gray-400"
                     : "bg-black/30 border-white/[0.06] hover:border-emerald-500/30 text-gray-200"
                 }`}
               >
-                <div className="flex items-center justify-between gap-2 mb-1.5">
-                  <div className="flex items-center gap-2">
-                    <span className="w-5 h-5 rounded-md bg-white/[0.08] text-gray-300 font-mono text-[10px] font-bold flex items-center justify-center">
+                <div className="flex flex-wrap items-center justify-between gap-1.5 mb-1.5">
+                  <div className="flex items-center gap-1.5 sm:gap-2">
+                    <span className="w-5 h-5 rounded-md bg-white/[0.08] text-gray-300 font-mono text-[10px] font-bold flex items-center justify-center flex-shrink-0">
                       #{item.index}
                     </span>
-                    <span className="font-mono text-xs text-gray-400 flex items-center gap-1">
-                      <Clock className="w-3 h-3 text-gray-500" />
+                    <span className="font-mono text-[11px] sm:text-xs text-gray-400 flex items-center gap-1">
+                      <Clock className="w-3 h-3 text-gray-500 flex-shrink-0" />
                       {item.timeStr}
                     </span>
                   </div>
 
-                  <div className="flex items-center gap-1.5">
+                  <div className="flex items-center gap-1 sm:gap-1.5 flex-wrap">
                     {item.isVocalStart && (
-                      <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-md bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 uppercase tracking-wider">
+                      <span className="text-[9px] sm:text-[10px] font-extrabold px-1.5 py-0.5 rounded-md bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 uppercase tracking-wider">
                         🎤 Vocal Start
                       </span>
                     )}
 
                     {item.isInstrumental && (
-                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-purple-500/20 text-purple-300 border border-purple-500/30 uppercase tracking-wider">
+                      <span className="text-[9px] sm:text-[10px] font-bold px-1.5 py-0.5 rounded-md bg-purple-500/20 text-purple-300 border border-purple-500/30 uppercase tracking-wider">
                         🎵 Instrumental
                       </span>
                     )}
 
                     {isCurrentlyActive && (
-                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-emerald-400 text-gray-950 uppercase tracking-wider animate-pulse flex items-center gap-1">
-                        <Play className="w-2.5 h-2.5 fill-current" /> Playing Now
+                      <span className="text-[9px] sm:text-[10px] font-bold px-1.5 py-0.5 rounded-md bg-emerald-400 text-gray-950 uppercase tracking-wider animate-pulse flex items-center gap-1">
+                        <Play className="w-2.5 h-2.5 fill-current" /> Playing
                       </span>
                     )}
                   </div>
                 </div>
 
                 <div
-                  className={`text-sm font-semibold pl-7 leading-relaxed ${
+                  className={`text-xs sm:text-sm font-semibold pl-2 sm:pl-7 leading-relaxed break-words ${
                     isCurrentlyActive
-                      ? "text-white text-base"
+                      ? "text-white text-sm sm:text-base font-bold"
                       : item.isInstrumental
-                      ? "text-purple-300/80 font-mono text-xs italic"
+                      ? "text-purple-300/80 font-mono text-[11px] sm:text-xs italic"
                       : "text-gray-200"
                   }`}
                 >
@@ -380,22 +406,22 @@ Task:
       {/* Tab 2: Raw SRT Code Preview */}
       {activeTab === "raw" && (
         <div className="rounded-xl bg-black border border-white/[0.08] overflow-hidden shadow-inner">
-          <div className="bg-gray-900/90 px-4 py-2 border-b border-white/[0.06] flex items-center justify-between text-xs text-gray-400 font-mono">
+          <div className="bg-gray-900/90 px-3 sm:px-4 py-2 border-b border-white/[0.06] flex items-center justify-between text-xs text-gray-400 font-mono">
             <span className="flex items-center gap-1.5">
-              <FileText className="w-3.5 h-3.5 text-emerald-400" />
-              <span>Standard SubRip format • Millisecond Precision</span>
+              <FileText className="w-3.5 h-3.5 text-emerald-400 flex-shrink-0" />
+              <span>SubRip UTF-8</span>
             </span>
-            <span className="text-emerald-400 font-bold">UTF-8 Encoded</span>
+            <span className="text-emerald-400 font-bold">Millisecond Precision</span>
           </div>
-          <div className="p-4 max-h-96 overflow-y-auto font-mono text-xs text-emerald-300/90 leading-relaxed whitespace-pre-wrap select-text bg-[#07090e]">
+          <div className="p-3 sm:p-4 max-h-96 overflow-y-auto font-mono text-[11px] sm:text-xs text-emerald-300/90 leading-relaxed whitespace-pre-wrap select-text bg-[#07090e]">
             {srtContent}
           </div>
         </div>
       )}
 
       {/* AI Video Director Prompt Banner */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 rounded-xl bg-gradient-to-r from-emerald-950/40 via-gray-900/80 to-purple-950/30 border border-emerald-500/30 shadow-lg">
-        <div className="flex items-center gap-3">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3.5 sm:p-4 rounded-xl bg-gradient-to-r from-emerald-950/40 via-gray-900/80 to-purple-950/30 border border-emerald-500/30 shadow-lg">
+        <div className="flex items-center gap-2.5 sm:gap-3">
           <div className="w-9 h-9 rounded-lg bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center text-emerald-400 flex-shrink-0">
             <Sparkles className="w-5 h-5" />
           </div>
@@ -404,7 +430,7 @@ Task:
               AI Video Director Prompt
             </h4>
             <p className="text-[11px] text-gray-300 mt-0.5">
-              Copy ready-to-paste prompt with your Master SRT for ChatGPT / Claude / Runway / Kling.
+              Copy ready-to-paste prompt with your Master SRT for AI video tools.
             </p>
           </div>
         </div>
@@ -412,7 +438,7 @@ Task:
         <button
           type="button"
           onClick={handleCopyPrompt}
-          className={`flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold rounded-lg transition-all flex-shrink-0 border ${
+          className={`flex items-center justify-center gap-1.5 px-3.5 py-2.5 min-h-[44px] text-xs font-bold rounded-lg transition-all flex-shrink-0 border touch-manipulation ${
             promptCopied
               ? "bg-emerald-600 text-white border-emerald-500 shadow-md"
               : "bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border-emerald-500/40"

@@ -17,7 +17,7 @@ const STAGES: {
   {
     key: "preparing",
     label: "Acoustic Normalization",
-    description: "FFmpeg 16kHz mono PCM decoding & duration extraction",
+    description: "Web Audio 16kHz mono PCM decoding & duration extraction",
     icon: Cpu,
   },
   {
@@ -72,31 +72,35 @@ export const ProcessingStatus: React.FC<ProcessingStatusProps> = ({
   const progressPercent = Math.min(100, Math.round(((currentIndex + 1) / (STAGES.length + 1)) * 100));
 
   return (
-    <div className="glass-card rounded-2xl p-6 border border-emerald-500/30 shadow-[0_0_50px_-12px_rgba(16,185,129,0.15)] relative overflow-hidden space-y-5">
+    <div
+      role="status"
+      aria-live="polite"
+      className="glass-card rounded-2xl p-4 sm:p-6 border border-emerald-500/30 shadow-[0_0_50px_-12px_rgba(16,185,129,0.15)] relative overflow-hidden space-y-4 sm:space-y-5"
+    >
       {/* Background Animated Glow */}
       <div className="absolute top-0 right-0 w-64 h-64 bg-emerald-500/10 rounded-full blur-3xl pointer-events-none animate-pulse"></div>
 
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-white/[0.08] pb-4">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center text-emerald-400 shadow-inner">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-white/[0.08] pb-3.5 sm:pb-4">
+        <div className="flex items-center gap-2.5 sm:gap-3">
+          <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center text-emerald-400 shadow-inner flex-shrink-0">
             <Loader2 className="w-5 h-5 animate-spin" />
           </div>
-          <div>
-            <h3 className="text-sm font-bold uppercase tracking-wider text-white flex items-center gap-2">
-              <span>REAL-TIME ACOUSTIC PIPELINE</span>
-              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
+          <div className="min-w-0">
+            <h3 className="text-xs sm:text-sm font-bold uppercase tracking-wider text-white flex items-center gap-1.5 sm:gap-2">
+              <span className="truncate">ACOUSTIC PIPELINE</span>
+              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping flex-shrink-0"></span>
             </h3>
-            <p className="text-xs text-emerald-400/90 font-mono mt-0.5">
+            <p className="text-[11px] sm:text-xs text-emerald-400/90 font-mono mt-0.5 truncate">
               Decoding waveform & aligning lyrics...
             </p>
           </div>
         </div>
 
         {/* Dynamic Progress Bar Counter */}
-        <div className="flex items-center gap-3">
-          <div className="text-right">
-            <span className="text-xs font-mono text-gray-400">Status</span>
-            <p className="text-sm font-bold font-mono text-emerald-400">
+        <div className="flex items-center justify-between sm:justify-end gap-3 w-full sm:w-auto">
+          <div className="text-left sm:text-right">
+            <span className="text-[11px] font-mono text-gray-400">Status</span>
+            <p className="text-xs sm:text-sm font-bold font-mono text-emerald-400">
               {progressPercent}% Complete
             </p>
           </div>
@@ -114,13 +118,13 @@ export const ProcessingStatus: React.FC<ProcessingStatusProps> = ({
       {/* Progress Bar */}
       <div className="w-full bg-gray-900/80 rounded-full h-2 overflow-hidden border border-white/[0.06]">
         <div
-          className="bg-gradient-to-r from-emerald-500 via-teal-400 to-emerald-300 h-full rounded-full transition-all duration-500 shadow-[0_0_15px_rgba(16,185,129,0.5)]"
+          className="bg-gradient-to-r from-emerald-500 via-teal-400 to-emerald-300 h-full rounded-full transition-all duration-300 shadow-[0_0_15px_rgba(16,185,129,0.5)]"
           style={{ width: `${progressPercent}%` }}
         ></div>
       </div>
 
       {/* Stages List */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
         {STAGES.map((stage, idx) => {
           const isDone = currentIndex > idx;
           const isActive = currentIndex === idx;
@@ -129,7 +133,7 @@ export const ProcessingStatus: React.FC<ProcessingStatusProps> = ({
           return (
             <div
               key={stage.key}
-              className={`flex items-start gap-3 p-3 rounded-xl border transition-all duration-200 ${
+              className={`flex items-start gap-2.5 sm:gap-3 p-2.5 sm:p-3 rounded-xl border transition-all duration-200 ${
                 isActive
                   ? "bg-emerald-950/40 border-emerald-500/50 shadow-md text-white scale-[1.01]"
                   : isDone
@@ -149,9 +153,9 @@ export const ProcessingStatus: React.FC<ProcessingStatusProps> = ({
                 )}
               </div>
 
-              <div className="overflow-hidden">
+              <div className="min-w-0 flex-1">
                 <p
-                  className={`text-xs font-bold ${
+                  className={`text-xs font-bold truncate ${
                     isActive
                       ? "text-emerald-300"
                       : isDone
