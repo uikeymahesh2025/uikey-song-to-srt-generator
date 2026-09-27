@@ -105,60 +105,82 @@ function applyBiquadFilter(input: Float32Array, coeffs: BiquadCoeffs): Float32Ar
 
 /**
  * Regex to detect user-indicated instrumental tags in lyrics:
- * e.g. [Instrumental], [Music], [Solo], [Guitar Solo], [Flute Solo], [Interlude], [BGM], [Beat Drop]
+ * e.g. [Instrumental], [Music], [Solo], [Guitar Solo], [Flute Solo], [Interlude], [BGM], [Beat Drop], (Instrumental)
  */
 export const INSTRUMENTAL_TAG_REGEX =
-  /^\[\s*(instrumental|music|solo|guitar|flute|violin|piano|interlude|bgm|beat\s*drop|break|music\s*break|no\s*vocal)[^\]]*\]$/i;
+  /^(\[|\()\s*(instrumental|music|solo|guitar|flute|violin|piano|interlude|bgm|beat\s*drop|break|music\s*break|no\s*vocal)[^\]\)]*(\]|\))$/i;
 
 /**
- * Regex to strip section headers like [Verse 1], [Chorus], [Bridge], [Hook]
+ * Regex to detect section headers like [Verse 1], [Chorus], [Bridge], [Hook]
  */
 export const SECTION_HEADER_REGEX =
   /^\[\s*(verse|chorus|bridge|hook|outro|intro|stanza|part|pre-chorus)[^\]]*\]$/i;
 
-interface ParsedLyricItem {
-  type: "lyric" | "instrumental";
-  text: string;
+export interface LyricSection {
+  type: "vocal" | "instrumental";
+  lines: string[];
 }
 
 /**
- * Parses user input lyrics, distinguishing lyrics from explicit instrumental cues and section headers
+ * Parses user input lyrics into sections of vocal lines and explicit instrumental markers.
+ * Also preserves stanza breaks (empty lines) as potential musical transitions.
  */
-export function parseLyricsWithMarkers(lyricsText: string): {
-  items: ParsedLyricItem[];
-  stanzas: ParsedLyricItem[][];
-} {
+export function parseLyricsIntoSections(lyricsText: string): LyricSection[] {
   const rawParagraphs = lyricsText.split(/\r?\n\s*\r?\n/);
-  const stanzas: ParsedLyricItem[][] = [];
-  const allItems: ParsedLyricItem[] = [];
+  const sections: LyricSection[] = [];
 
   for (const para of rawParagraphs) {
     const lines = para.split(/\r?\n/).map((l) => l.trim()).filter((l) => l.length > 0);
-    const currentStanza: ParsedLyricItem[] = [];
+    const currentVocalLines: string[] = [];
 
     for (const line of lines) {
       if (SECTION_HEADER_REGEX.test(line)) {
-        // Skip structural headers like [Verse 1], [Chorus]
+        // Skip structural headers
         continue;
       }
 
       if (INSTRUMENTAL_TAG_REGEX.test(line)) {
-        const item: ParsedLyricItem = { type: "instrumental", text: "[INSTRUMENTAL | NO VOCAL]" };
-        currentStanza.push(item);
-        allItems.push(item);
+        // Flush previous vocal lines if any
+        if (currentVocalLines.length > 0) {
+          sections.push({ type: "vocal", lines: [...currentVocalLines] });
+          currentVocalLines.length = 0;
+        }
+        sections.push({ type: "instrumental", lines: ["[INSTRUMENTAL | NO VOCAL]"] });
       } else {
-        const item: ParsedLyricItem = { type: "lyric", text: line };
-        currentStanza.push(item);
-        allItems.push(item);
+        currentVocalLines.push(line);
       }
     }
 
-    if (currentStanza.length > 0) {
-      stanzas.push(currentStanza);
+    if (currentVocalLines.length > 0) {
+      sections.push({ type: "vocal", lines: currentVocalLines });
     }
   }
 
-  return { items: allItems, stanzas };
+  return sections;
+}
+
+/**
+ * Backward compatibility parser
+ */
+export function parseLyricsWithMarkers(lyricsText: string) {
+  const sections = parseLyricsIntoSections(lyricsText);
+  const items: { type: "lyric" | "instrumental"; text: string }[] = [];
+  const stanzas: { type: "lyric" | "instrumental"; text: string }[][] = [];
+
+  for (const s of sections) {
+    const currentStanza: { type: "lyric" | "instrumental"; text: string }[] = [];
+    for (const l of s.lines) {
+      const it: { type: "lyric" | "instrumental"; text: string } = {
+        type: s.type === "vocal" ? "lyric" : "instrumental",
+        text: l,
+      };
+      items.push(it);
+      currentStanza.push(it);
+    }
+    stanzas.push(currentStanza);
+  }
+
+  return { items, stanzas };
 }
 
 /**
@@ -228,7 +250,6 @@ export function analyzeAudioBuffer(
   const fullRms = new Float32Array(numFrames);
   const vocalRms = new Float32Array(numFrames);
   const sideVocalRms = new Float32Array(numFrames);
-  const zcrArray = new Float32Array(numFrames);
 
   for (let f = 0; f < numFrames; f++) {
     const start = f * frameLength;
@@ -238,8 +259,6 @@ export function analyzeAudioBuffer(
     let sumFullSq = 0;
     let sumVocalSq = 0;
     let sumSideVocalSq = 0;
-    let zeroCrossings = 0;
-    let prevSample = midVocalBand[start];
 
     for (let i = start; i < end; i++) {
       const m = midSignal[i];
@@ -247,11 +266,6 @@ export function analyzeAudioBuffer(
 
       const v = midVocalBand[i];
       sumVocalSq += v * v;
-
-      if ((prevSample >= 0 && v < 0) || (prevSample < 0 && v >= 0)) {
-        zeroCrossings++;
-      }
-      prevSample = v;
 
       if (sideVocalBand) {
         const s = sideVocalBand[i];
@@ -262,17 +276,14 @@ export function analyzeAudioBuffer(
     fullRms[f] = Math.sqrt(sumFullSq / count);
     vocalRms[f] = Math.sqrt(sumVocalSq / count);
     sideVocalRms[f] = sideVocalBand ? Math.sqrt(sumSideVocalSq / count) : 0;
-    zcrArray[f] = zeroCrossings / count;
   }
 
-  // Step 4: Multi-Feature Vocal vs Instrument Discrimination
-  // Vocal vs Instrument Features:
-  // 1. Center Vocal Isolation: Lead vocals are panned dead-center (Mid - Side is high).
-  //    Instrumental solos (stereo guitars, synths, stereo reverbs) have large Side energy (Mid - Side drops to ~0).
-  // 2. Syllabic Envelope Modulation (3 - 6 Hz rhythm): Humans pronounce syllables at 3-6 Hz rate.
-  //    Sustained instruments (flute, violin, synth lead, guitar notes) have minimal syllable envelope modulation.
-  // 3. Vocal-to-Total Spectrum Ratio: Vocals concentrate energy in 300Hz-3000Hz band.
-  const vocalScores = new Float32Array(numFrames);
+  // Step 4: Multi-Feature Vocal Activity Metric
+  // Features:
+  // 1. Center Vocal Isolation: Vocals are panned center; stereo instrument solos have large Side energy.
+  // 2. Syllabic Envelope Modulation (3 - 6 Hz rhythm of words).
+  // 3. Vocal band energy concentration ratio.
+  const rawVocalScores = new Float32Array(numFrames);
 
   for (let f = 0; f < numFrames; f++) {
     const vRms = vocalRms[f];
@@ -280,19 +291,18 @@ export function analyzeAudioBuffer(
     const fRms = fullRms[f];
 
     if (vRms < 0.003 || fRms < 0.004) {
-      vocalScores[f] = 0;
+      rawVocalScores[f] = 0;
       continue;
     }
 
-    // Center Vocal Prominence:
-    // Lead vocals: side is near 0 -> centerVocal is high.
-    // Stereo instruments: side is high -> centerVocal drops dramatically.
+    // In stereo mixes, lead vocal cancels in side channel (vRms - 1.15 * sRms is high).
+    // In instrumental solos, stereo instruments make sRms large, so centerVocal drops to ~0.
     const centerVocal = sideVocalBand ? Math.max(0, vRms - 1.15 * sRms) : vRms;
 
-    // Vocal band ratio: fraction of audio energy inside vocal formant band
+    // Vocal ratio: energy in vocal band vs full audio
     const vocalRatio = vRms / (fRms + 1e-5);
 
-    // Syllabic envelope modulation (measured across +/- 200ms window, 4 frames each side)
+    // Syllabic envelope modulation over +/- 200ms (4 frames each side)
     const winStart = Math.max(0, f - 4);
     const winEnd = Math.min(numFrames, f + 5);
     let minV = 999999;
@@ -307,86 +317,56 @@ export function analyzeAudioBuffer(
     const meanV = sumV / Math.max(1, winEnd - winStart);
     const modulation = (maxV - minV) / (meanV + 1e-5);
 
-    // Zero-Crossing Rate variance over 6 frames:
-    // Singing alternates vowels (low ZCR) and consonants (high ZCR).
-    let zcrSum = 0;
-    for (let j = Math.max(0, f - 3); j < Math.min(numFrames, f + 3); j++) {
-      zcrSum += zcrArray[j];
-    }
-    const zcrMean = zcrSum / Math.max(1, Math.min(numFrames, f + 3) - Math.max(0, f - 3));
-
-    // Composite vocal confidence:
-    // Only singing vocals combine high center energy, vocal formant ratio, and syllabic modulation.
-    // Pure instruments (guitar solo, flute solo, synth pads, drum breaks) have significantly lower scores.
-    const score =
+    rawVocalScores[f] =
       centerVocal *
       Math.min(1.5, vocalRatio * 2.2) *
-      (0.35 + 0.65 * Math.min(1.0, modulation * 1.8)) *
-      (0.5 + 0.5 * Math.min(1.0, zcrMean * 8.0));
-
-    vocalScores[f] = score;
+      (0.35 + 0.65 * Math.min(1.0, modulation * 1.8));
   }
 
-  // Step 5: Adaptive Global Thresholding
-  // Collect active frames to find the dynamic boundary between singing voice and instrumental accompaniment
+  // Step 5: Moving Average Vocal Density (1.0-second smoothing window)
+  // This solves the stepping-stone problem: isolated drum hits or guitar spikes in a solo
+  // cannot bridge across an entire instrumental section because vocal density stays near 0!
+  const smoothRadius = Math.ceil(0.5 / (hopMs / 1000)); // +/- 500ms (1.0s total window)
+  const smoothedVocalScores = new Float32Array(numFrames);
+
+  for (let f = 0; f < numFrames; f++) {
+    const wStart = Math.max(0, f - smoothRadius);
+    const wEnd = Math.min(numFrames, f + smoothRadius + 1);
+    let sSum = 0;
+    for (let j = wStart; j < wEnd; j++) {
+      sSum += rawVocalScores[j];
+    }
+    smoothedVocalScores[f] = sSum / Math.max(1, wEnd - wStart);
+  }
+
+  // Dynamic threshold based on active song distribution
   const activeScores: number[] = [];
   for (let f = 0; f < numFrames; f++) {
     if (fullRms[f] > 0.005) {
-      activeScores.push(vocalScores[f]);
+      activeScores.push(smoothedVocalScores[f]);
     }
   }
   activeScores.sort((a, b) => a - b);
 
-  // 40th percentile of active audio represents the background accompaniment floor
-  const baselineScore =
-    activeScores.length > 0
-      ? activeScores[Math.floor(activeScores.length * 0.40)]
-      : 0.008;
+  let baselineScore = 0.008;
+  let maxActiveScore = 0.05;
+  if (activeScores.length > 0) {
+    baselineScore = activeScores[Math.floor(activeScores.length * 0.35)];
+    maxActiveScore = activeScores[Math.floor(activeScores.length * 0.95)];
+  }
 
-  const vocalThreshold = Math.max(0.006, baselineScore * 1.25);
+  const vocalThreshold = Math.max(
+    0.006,
+    baselineScore + 0.15 * Math.max(0, maxActiveScore - baselineScore)
+  );
 
   const isVocalFrame = new Uint8Array(numFrames);
   for (let f = 0; f < numFrames; f++) {
-    isVocalFrame[f] = vocalScores[f] >= vocalThreshold ? 1 : 0;
+    isVocalFrame[f] = smoothedVocalScores[f] >= vocalThreshold ? 1 : 0;
   }
 
-  // Step 6: Smoothing & Micro-Pause Bridging
-  // Bridge short natural breath pauses between words/phrases (<= 450ms)
-  const bridgeFrames = Math.ceil(0.45 / (hopMs / 1000));
-  let nonVocalCount = 0;
-
-  for (let f = 0; f < numFrames; f++) {
-    if (isVocalFrame[f] === 1) {
-      if (nonVocalCount > 0 && nonVocalCount <= bridgeFrames) {
-        for (let b = f - nonVocalCount; b < f; b++) {
-          isVocalFrame[b] = 1;
-        }
-      }
-      nonVocalCount = 0;
-    } else {
-      nonVocalCount++;
-    }
-  }
-
-  // Remove short transient clicks/drum transients (< 350ms)
-  const minVocalFrames = Math.ceil(0.35 / (hopMs / 1000));
-  let runStart = -1;
-  for (let f = 0; f <= numFrames; f++) {
-    const isVocal = f < numFrames && isVocalFrame[f] === 1;
-    if (isVocal && runStart === -1) {
-      runStart = f;
-    } else if (!isVocal && runStart !== -1) {
-      const runLength = f - runStart;
-      if (runLength < minVocalFrames) {
-        for (let b = runStart; b < f; b++) {
-          isVocalFrame[b] = 0;
-        }
-      }
-      runStart = -1;
-    }
-  }
-
-  // Step 7: Extract Vocal Intervals
+  // Step 6: Extract Vocal Blocks & EXACT Instrumental Gaps
+  // Contiguous vocal intervals:
   const rawIntervals: VocalInterval[] = [];
   let currentStart = -1;
 
@@ -395,7 +375,7 @@ export function analyzeAudioBuffer(
     if (isVocalFrame[f] === 1 && currentStart === -1) {
       currentStart = timeSec;
     } else if (isVocalFrame[f] === 0 && currentStart !== -1) {
-      if (timeSec - currentStart >= 0.5) {
+      if (timeSec - currentStart >= 0.8) {
         rawIntervals.push({
           startSec: parseFloat(currentStart.toFixed(3)),
           endSec: parseFloat(timeSec.toFixed(3)),
@@ -405,7 +385,7 @@ export function analyzeAudioBuffer(
     }
   }
 
-  if (currentStart !== -1 && duration - currentStart >= 0.5) {
+  if (currentStart !== -1 && duration - currentStart >= 0.8) {
     rawIntervals.push({
       startSec: parseFloat(currentStart.toFixed(3)),
       endSec: parseFloat(duration.toFixed(3)),
@@ -422,7 +402,7 @@ export function analyzeAudioBuffer(
     });
   }
 
-  // Any non-vocal gap >= 1.8s is an EXACT [INSTRUMENTAL | NO VOCAL] section!
+  // Any non-vocal gap >= 1.8s between vocal intervals is an EXACT [INSTRUMENTAL | NO VOCAL] section!
   const INSTRUMENTAL_GAP_THRESHOLD_SEC = 1.8;
 
   const vocalBlocks: VocalInterval[] = [];
@@ -436,7 +416,7 @@ export function analyzeAudioBuffer(
       vocalBlocks.push(currentBlock);
       currentBlock = { ...nextInterval };
     } else {
-      // Merge intervals separated by normal within-phrase breath pause
+      // Merge intervals separated only by short breath pause (< 1.8s)
       currentBlock.endSec = nextInterval.endSec;
     }
   }
@@ -444,16 +424,22 @@ export function analyzeAudioBuffer(
 
   notify("gaps");
 
-  // Step 8: Parse Lyrics with Explicit Instrumental Marker Detection
-  const { items: parsedItems } = parseLyricsWithMarkers(lyricsText);
-  const onlyLyricLines = parsedItems.filter((it) => it.type === "lyric").map((it) => it.text);
+  // Step 7: Parse Lyrics into Vocal Sections and Explicit Instrumental Markers
+  const parsedSections = parseLyricsIntoSections(lyricsText);
+  const vocalSections = parsedSections.filter((s) => s.type === "vocal");
 
-  if (onlyLyricLines.length === 0) {
+  // Collect all pure lyric lines
+  const allLyricLines: string[] = [];
+  for (const s of vocalSections) {
+    allLyricLines.push(...s.lines);
+  }
+
+  if (allLyricLines.length === 0) {
     throw new Error("Please paste at least one line of lyrics.");
   }
 
   // Line weighting based on words and characters
-  const lineWeights = onlyLyricLines.map((line) => {
+  const lineWeights = allLyricLines.map((line) => {
     const words = line.split(/\s+/).filter(Boolean).length;
     const chars = line.length;
     return Math.max(1, words * 1.5 + chars * 0.1);
@@ -485,7 +471,7 @@ export function analyzeAudioBuffer(
     musicEventCount++;
   }
 
-  // Partition onlyLyricLines across vocal blocks strictly proportional to block duration
+  // Partition lyric lines across the vocal blocks strictly proportional to block duration
   let lineCursor = 0;
 
   for (let bIdx = 0; bIdx < vocalBlocks.length; bIdx++) {
@@ -496,13 +482,13 @@ export function analyzeAudioBuffer(
     // Number of lines for this vocal block
     let blockLineCount: number;
     if (isLastBlock) {
-      blockLineCount = onlyLyricLines.length - lineCursor;
+      blockLineCount = allLyricLines.length - lineCursor;
     } else {
       const blockWeightTarget = (blockDuration / totalVocalDuration) * totalWeight;
       let accumWeight = 0;
       let count = 0;
       while (
-        lineCursor + count < onlyLyricLines.length - (vocalBlocks.length - 1 - bIdx) &&
+        lineCursor + count < allLyricLines.length - (vocalBlocks.length - 1 - bIdx) &&
         (accumWeight < blockWeightTarget || count === 0)
       ) {
         accumWeight += lineWeights[lineCursor + count];
@@ -511,7 +497,7 @@ export function analyzeAudioBuffer(
       blockLineCount = Math.max(1, count);
     }
 
-    const blockLines = onlyLyricLines.slice(lineCursor, lineCursor + blockLineCount);
+    const blockLines = allLyricLines.slice(lineCursor, lineCursor + blockLineCount);
     const blockWeights = lineWeights.slice(lineCursor, lineCursor + blockLineCount);
     const blockTotalWeight = blockWeights.reduce((a, b) => a + b, 0);
 
@@ -534,7 +520,7 @@ export function analyzeAudioBuffer(
         lineEnd = Math.min(block.endSec, lineStart + 1.0);
       }
 
-      // 50ms inter-cue boundary buffer to prevent subtitle flicker
+      // 50ms boundary buffer between cues
       const cueEnd =
         li === blockLines.length - 1
           ? block.endSec
@@ -583,7 +569,7 @@ export function analyzeAudioBuffer(
     musicEventCount++;
   }
 
-  // Step 9: Build standard SubRip SRT format
+  // Step 8: Build standard SubRip SRT format
   const srtBlocks = entries.map((entry, idx) => {
     const id = idx + 1;
     const startStr = formatTimestamp(entry.startSec);
@@ -605,7 +591,7 @@ export function analyzeAudioBuffer(
     stats: {
       duration_seconds: parseFloat(duration.toFixed(2)),
       total_events: entries.length,
-      lyric_lines: onlyLyricLines.length,
+      lyric_lines: allLyricLines.length,
       instrumental_gaps: instrumentalGapCount,
       music_events: musicEventCount,
     },

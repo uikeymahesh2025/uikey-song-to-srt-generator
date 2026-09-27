@@ -88,6 +88,22 @@ export const LyricsInput: React.FC<LyricsInputProps> = ({
           >
             English
           </button>
+          <button
+            type="button"
+            onClick={() => {
+              const trimmed = lyrics.trimEnd();
+              onChange(
+                trimmed
+                  ? `${trimmed}\n\n[INSTRUMENTAL | NO VOCAL]\n\n`
+                  : `[INSTRUMENTAL | NO VOCAL]\n\n`
+              );
+            }}
+            disabled={disabled}
+            className="text-xs font-semibold px-2.5 py-1.5 min-h-[34px] rounded-lg bg-purple-950/40 hover:bg-purple-900/50 active:bg-purple-800/60 text-purple-300 border border-purple-800/50 transition flex items-center gap-1 touch-manipulation"
+            title="Insert [INSTRUMENTAL | NO VOCAL] marker into lyrics"
+          >
+            <span>🎵 + Instrumental</span>
+          </button>
         </div>
 
         <div className="flex items-center gap-1.5">
