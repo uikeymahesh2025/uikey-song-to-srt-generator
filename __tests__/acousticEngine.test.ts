@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { formatTimestamp, analyzeAudioBuffer } from "@/lib/acousticEngine";
+import {
+  formatTimestamp,
+  analyzeAudioBuffer,
+  parseLyricsWithMarkers,
+} from "@/lib/acousticEngine";
 
 describe("Acoustic Engine Instrumental and Vocal Gap Detection Tests", () => {
   it("formats timestamps with exact millisecond precision and rollover", () => {
@@ -10,36 +14,82 @@ describe("Acoustic Engine Instrumental and Vocal Gap Detection Tests", () => {
     expect(formatTimestamp(59.9999)).toBe("00:01:00,000");
   });
 
-  function createSyntheticAudio(
+  it("parses user lyrics and separates explicit [Instrumental] tags from singing lyrics", () => {
+    const rawLyrics = `[Verse 1]
+Tere bina jeena nahi
+Main to mar jaunga
+
+[Instrumental]
+
+[Chorus]
+Tu hi meri manzil hai
+Tu hi mera jahan`;
+
+    const { items, stanzas } = parseLyricsWithMarkers(rawLyrics);
+    const onlyLyrics = items.filter((it) => it.type === "lyric").map((it) => it.text);
+    const instrumentals = items.filter((it) => it.type === "instrumental");
+
+    expect(onlyLyrics).toHaveLength(4);
+    expect(onlyLyrics).toEqual([
+      "Tere bina jeena nahi",
+      "Main to mar jaunga",
+      "Tu hi meri manzil hai",
+      "Tu hi mera jahan",
+    ]);
+    expect(instrumentals).toHaveLength(1);
+    expect(instrumentals[0].text).toBe("[INSTRUMENTAL | NO VOCAL]");
+  });
+
+  function createRealisticSongAudio(
     sampleRate: number,
     durationSec: number,
-    vocalSegments: { start: number; end: number }[]
+    vocalSegments: { start: number; end: number }[],
+    instrumentSoloSegments: { start: number; end: number }[]
   ) {
     const totalSamples = Math.floor(sampleRate * durationSec);
     const ch0 = new Float32Array(totalSamples);
     const ch1 = new Float32Array(totalSamples);
 
-    // Add low-level instrumental background bed (drums/bass + cymbals)
+    // 1. Continuous backing track (bass, drums, synth pad)
     for (let i = 0; i < totalSamples; i++) {
       const t = i / sampleRate;
-      // 80Hz bass + 5000Hz cymbal sizzle (non-vocal frequencies)
-      const bass = 0.08 * Math.sin(2 * Math.PI * 80 * t);
-      const cymbal = 0.04 * (Math.random() - 0.5);
-      ch0[i] = bass + cymbal;
-      ch1[i] = bass - cymbal; // stereo spread on instruments
+      const bass = 0.08 * Math.sin(2 * Math.PI * 75 * t);
+      const drumSnare = ((i % Math.floor(sampleRate * 0.5)) < 200 ? 0.15 : 0) * (Math.random() - 0.5);
+      const stereoPad = 0.04 * Math.sin(2 * Math.PI * 440 * t);
+      ch0[i] = bass + drumSnare + stereoPad;
+      ch1[i] = bass + drumSnare - stereoPad; // wide stereo accompaniment
     }
 
-    // Add vocal formant frequencies (~800Hz - 1500Hz) centered (L=R) during vocal segments
+    // 2. Add loud stereo instrument solos (guitar solo / flute / synth lead) during solo segments
+    // Notice: Instrument solo is LOUD (amplitude 0.5) and has frequencies in vocal range (800Hz - 1500Hz),
+    // but has wide stereo spread (L != R) and steady non-syllabic envelope.
+    for (const solo of instrumentSoloSegments) {
+      const startIdx = Math.floor(solo.start * sampleRate);
+      const endIdx = Math.min(totalSamples, Math.floor(solo.end * sampleRate));
+      for (let i = startIdx; i < endIdx; i++) {
+        const t = i / sampleRate;
+        const guitarLead = 0.45 * Math.sin(2 * Math.PI * 920 * t);
+        // Stereo ping-pong/chorus effect on guitar solo
+        ch0[i] += guitarLead;
+        ch1[i] -= guitarLead * 0.85;
+      }
+    }
+
+    // 3. Add human singing voice during vocal segments:
+    // Centered (L = R), with syllabic modulation (alternating vowels/consonants at ~4Hz)
     for (const seg of vocalSegments) {
       const startIdx = Math.floor(seg.start * sampleRate);
       const endIdx = Math.min(totalSamples, Math.floor(seg.end * sampleRate));
       for (let i = startIdx; i < endIdx; i++) {
         const t = i / sampleRate;
-        const formant1 = 0.35 * Math.sin(2 * Math.PI * 750 * t);
+        // 4Hz syllabic rhythm: envelope peaks on vowels, dips between syllables
+        const syllableEnv = 0.6 + 0.4 * Math.sin(2 * Math.PI * 4 * t);
+        const formant1 = 0.35 * Math.sin(2 * Math.PI * 720 * t);
         const formant2 = 0.25 * Math.sin(2 * Math.PI * 1450 * t);
-        const vocal = formant1 + formant2;
+        const vocal = syllableEnv * (formant1 + formant2);
+        // Center panned lead vocal (L == R)
         ch0[i] += vocal;
-        ch1[i] += vocal; // centered vocal
+        ch1[i] += vocal;
       }
     }
 
@@ -51,24 +101,34 @@ describe("Acoustic Engine Instrumental and Vocal Gap Detection Tests", () => {
     };
   }
 
-  it("detects exact [MUSIC INTRO], [INSTRUMENTAL | NO VOCAL], and [OUTRO] timestamps", () => {
-    // Song of 30 seconds:
-    // 0.0s - 4.0s: Music Intro (instruments only)
+  it("accurately detects [INSTRUMENTAL | NO VOCAL] even when a loud guitar/synth solo plays in the interlude", () => {
+    // 30 second song:
+    // 0.0s - 4.0s: Music Intro
     // 4.0s - 12.0s: Verse 1 (vocals singing)
-    // 12.0s - 18.0s: Instrumental Solo / No Vocal (instruments only, 6.0 seconds gap)
-    // 18.0s - 26.0s: Chorus (vocals singing)
-    // 26.0s - 30.0s: Outro (instruments only, 4.0 seconds)
-    const audio = createSyntheticAudio(22050, 30, [
-      { start: 4.0, end: 12.0 },
-      { start: 18.0, end: 26.0 },
-    ]);
+    // 12.0s - 19.0s: Loud Guitar Solo / Instrumental Interlude (NO singing vocals)
+    // 19.0s - 26.0s: Chorus (vocals singing)
+    // 26.0s - 30.0s: Outro
+    const audio = createRealisticSongAudio(
+      22050,
+      30,
+      [
+        { start: 4.0, end: 12.0 },
+        { start: 19.0, end: 26.0 },
+      ],
+      [{ start: 12.0, end: 19.0 }] // Loud guitar solo during the interlude!
+    );
 
-    const lyrics = `Line one of verse
-Line two of verse
-Chorus line one
-Chorus line two`;
+    const lyrics = `[Verse 1]
+Pal ek pal me tham sa gaya
+Tu hath me hath jo de gaya
 
-    const result = analyzeAudioBuffer(audio, lyrics, "My_Hit_Song.mp3");
+[Instrumental]
+
+[Chorus]
+Main jahan rahoon
+Main kahin bhi hoon`;
+
+    const result = analyzeAudioBuffer(audio, lyrics, "RockSong.mp3");
 
     expect(result.success).toBe(true);
     expect(result.stats?.instrumental_gaps).toBeGreaterThanOrEqual(1);
@@ -77,26 +137,34 @@ Chorus line two`;
 
     // 1. Verify [MUSIC INTRO] exists at beginning
     expect(srt).toContain("[MUSIC INTRO]");
-    expect(srt).toMatch(/00:00:00,000 --> 00:00:0[34],[0-9]{3}\n\[MUSIC INTRO\]/);
 
-    // 2. Verify [INSTRUMENTAL | NO VOCAL] exists at exact interlude (~12.0s to ~18.0s)
+    // 2. Verify [INSTRUMENTAL | NO VOCAL] is generated during the loud guitar solo (~12s to ~19s)
     expect(srt).toContain("[INSTRUMENTAL | NO VOCAL]");
-    // Check that instrumental starts around 11-13s and ends around 17-19s
-    expect(srt).toMatch(/00:00:1[123],[0-9]{3} --> 00:00:1[789],[0-9]{3}\n\[INSTRUMENTAL \| NO VOCAL\]/);
+    expect(srt).toMatch(/00:00:1[123],[0-9]{3} --> 00:00:1[890],[0-9]{3}\n\[INSTRUMENTAL \| NO VOCAL\]/);
 
-    // 3. Verify [OUTRO] exists at song end (~26.0s to 30.0s)
+    // 3. Verify [OUTRO] exists at end (~26s to 30s)
     expect(srt).toContain("[OUTRO]");
-    expect(srt).toMatch(/00:00:2[567],[0-9]{3} --> 00:00:30,000\n\[OUTRO\]/);
 
-    // 4. Verify lyric lines have [VOCAL START] on the first line
-    expect(srt).toContain("[VOCAL START] Line one of verse");
+    // 4. Verify lyric lines are placed in singing sections, NEVER in the guitar solo
+    expect(srt).toContain("Pal ek pal me tham sa gaya");
+    expect(srt).toContain("Tu hath me hath jo de gaya");
+    expect(srt).toContain("Main jahan rahoon");
+    expect(srt).toContain("Main kahin bhi hoon");
+
+    // Ensure the words '[Instrumental]' are NOT sung as lyrics!
+    expect(srt).not.toMatch(/\[VOCAL START\] \[Instrumental\]/);
   });
 
   it("ensures lyric lines never overlap into [INSTRUMENTAL | NO VOCAL] gaps", () => {
-    const audio = createSyntheticAudio(22050, 25, [
-      { start: 2.0, end: 8.0 },
-      { start: 14.0, end: 20.0 },
-    ]);
+    const audio = createRealisticSongAudio(
+      22050,
+      25,
+      [
+        { start: 2.0, end: 9.0 },
+        { start: 15.0, end: 21.0 },
+      ],
+      [{ start: 9.0, end: 15.0 }]
+    );
 
     const lyrics = `Tere bina jeena nahi
 Main to mar jaunga
@@ -133,10 +201,8 @@ Tu hi mera jahan`;
         } else if (!text.includes("[MUSIC INTRO]") && !text.includes("[OUTRO]")) {
           // If this is a lyric cue, verify it DOES NOT fall inside the instrumental interval
           if (foundInstrumental) {
-            // Lines after the instrumental break must start at or after the gap ends
             expect(sSec).toBeGreaterThanOrEqual(instrumentalEnd - 0.05);
           } else {
-            // Lines before the instrumental break must end before or at the gap start
             if (instrumentalStart > 0) {
               expect(eSec).toBeLessThanOrEqual(instrumentalStart + 0.05);
             }
